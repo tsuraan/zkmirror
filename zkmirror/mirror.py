@@ -1,7 +1,9 @@
 from threading import Lock
 import zookeeper
+import json
 
 from .node import Node
+from .js import JsNode
 from .zk import ZooKeeperException
 from .zk import fix_path
 from .zk import describe_state
@@ -56,6 +58,9 @@ class Mirror(object):
           self.__nodes[path] = node
         return node
 
+  def get_json(self, path):
+    return JsNode(self.get(path))
+
   @fix_path
   def create(self, path, value=None, flags=0):
     if not flags:
@@ -64,6 +69,9 @@ class Mirror(object):
       return node
     path = zookeeper.create(self.__zk, path, value, ALL_ACL, flags)
     return self.get(path)
+
+  def create_json(self, path, value, flags=0):
+    return JsNode(self.create(path, json.dumps(value), flags))
 
   def _get_cb(self, path):
     def cb(_zk, status, value, meta):

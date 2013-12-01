@@ -2,6 +2,7 @@ from .zk import NodeExistsException
 from .zk import NoNodeException
 from .zk import fix_path
 from .zk import ALL_ACL
+import traceback
 import zookeeper
 import time
 
@@ -72,6 +73,11 @@ class Value(object):
     return value
 
   def _wait(self, timeout=5):
+    try:
+      return self.__val
+    except AttributeError:
+      pass
+
     start = time.time()
     end   = start + timeout
     # Busy loop for a second
@@ -99,46 +105,120 @@ class Node(object):
     self.__zk       = zk
     self.__value    = Value()
     self.__children = Value()
+    self.__val_cbs  = {}
+    self.__ch_cbs   = {}
 
   @property
   def path(self):
     return self.__path
 
-  def get_value(self):
+  def value(self):
     """Get the value and metadata for this node. This will raise
     NoNodeException if the node doesn't exist.
     """
     return self.__value.get()
 
-  def get_children(self):
+  def children(self):
     """Get the children of this node. This raises NoNodeException if the node
     doesn't exist.
     """
-    return self.__children.get()
+    return list(self.__children.get())
 
   def create(self, value=None):
     """Create a node at this path; this will fail if this node already has
     data, or in all sorts of connection failure events.
     """
     try:
-      self.get_value()
+      self.value()
       raise NodeExistsException
     except NoNodeException:
       zookeeper.create(self.__zk.fileno(), self.path, value, ALL_ACL, 0)
 
+  def set(self, value, version):
+    """Set the value to store at this node. If this node doesn't exist, this
+    will raise NoNodeException; if the given version isn't the most recently
+    stored in zookeeper, this will raise BadVersionException. Other server
+    errors will raise other exceptions.
+
+    To stomp over the value, regardless of what is stored in zookeeper, set
+    version to -1.
+    """
+    zookeeper.set(self.__zk.fileno(), self.path, value, version)
+
+  def addValueWatcher(self, key, fn):
+    """
+    """
+    self._add_cb("value", self.__val_cbs, key, fn)
+
+  def addChildWatcher(self, key, fn):
+    """
+    """
+    self._add_cb("child", self.__ch_cbs, key, fn)
+
+  def delValueWatcher(self, key):
+    """
+    """
+    try:             del self.__val_cbs[key]
+    except KeyError: pass
+
+  def delChildWatcher(self, key):
+    """
+    """
+    try:             del self.__ch_cbs[key]
+    except KeyError: pass
+
+  def _add_cb(self, desc, dct, key, fn):
+    def catcher(val):
+      try:
+        fn(val)
+      except:
+        print desc, "watcher callbck threw this:"
+        traceback.print_exc()
+    dct[key]=catcher
+
   def _delete(self):
     """Only to be called by zk, update that this node is deleted.
     """
+    stored = self._immed_raw_value()
+    if stored is not None:
+      for fn in self.__val_cbs.values():
+        fn(None)
     self.__value._set(None)
+
+    children = self._immed_raw_children()
+    if children is not None:
+      for fn in self.__ch_cbs.values():
+        fn(None)
     self.__children._set(None)
 
   def _val(self, value, meta):
     """Only to be called by zk, update this node's stored value.
     """
-    self.__value._set( (value, Meta(meta)) )
+    meta = Meta(meta)
+    stored = self._immed_raw_value()
+    if (stored is None) or (stored[1].version != meta.version):
+      for fn in self.__val_cbs.values():
+        fn( (value, meta) )
+    self.__value._set( (value, meta) )
 
   def _children(self, children):
     """Only to be called by zk, update this node's children.
     """
+    existing = self._immed_raw_children()
+    if (existing is None) or (existing != children):
+      for fn in self.__ch_cbs.values():
+        fn( children )
     self.__children._set(children)
+
+  def _immed_raw_value(self):
+    try:
+      return self.__value._wait(0)
+    except zookeeper.OperationTimeoutException:
+      return None
+
+  def _immed_raw_children(self):
+    try:
+      return self.__children._wait(0)
+    except zookeeper.OperationTimeoutException:
+      return None
 
