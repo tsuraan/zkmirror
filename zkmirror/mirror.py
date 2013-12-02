@@ -5,6 +5,7 @@ import json
 import time
 import sys
 
+from .chroot import ChrootMirror
 from .node import Node
 from .js import JsNode
 from .zk import ZooKeeperException
@@ -127,6 +128,15 @@ class Mirror(object):
     """
     try:             del self.__state_cbs[key]
     except KeyError: pass
+
+  @fix_path
+  def chroot(self, path):
+    """Get a version of this mirror whose root has been changed to the given
+    path. All create and get requests will have the given path prepended to
+    them, and returned nodes will similarly have their path attributes
+    changed.
+    """
+    return ChrootMirror(path, self)
 
   def _events(self, zk, event, state, path):
     if zk != self.__zk:
