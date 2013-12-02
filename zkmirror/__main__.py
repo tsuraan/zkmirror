@@ -7,32 +7,50 @@ import uuid
 import sys
 
 args = sys.argv[1:]
-if sys.argv[1:] == ['states']:
-  for attr in dir(zookeeper):
-    if attr.endswith('_STATE'):
-      print(attr)
-elif sys.argv[1:] == ['events']:
-  for attr in dir(zookeeper):
-    if attr.endswith('_EVENT'):
-      print(attr)
-elif sys.argv[1:] == ['exceptions']:
+if '--debug' in args:
+  import zkmirror.mirror as M
+  M.DEBUG=True
+  args.remove('--debug')
+
+if args == ['states']:
+  pairs = [(getattr(zookeeper, attr), attr) for attr in dir(zookeeper)
+      if attr.endswith('_STATE')]
+  for pair in sorted(pairs):
+    print("%4d %s" % pair)
+elif args == ['events']:
+  pairs = [(getattr(zookeeper, attr), attr) for attr in dir(zookeeper)
+      if attr.endswith('_EVENT')]
+  for pair in sorted(pairs):
+    print("%4d %s" % pair)
+elif args == ['consts']:
+  pairs = [(getattr(zookeeper, attr), attr) for attr in dir(zookeeper)
+      if attr.upper() == attr]
+  for pair in sorted(pairs):
+    print("%4d %s" % pair)
+elif args == ['exceptions']:
   def _go(exc, indent):
     print('%s%s' % ('  '*indent, exc.__name__))
     for child in sorted(exc.__subclasses__(), key=str):
       _go(child, indent+1)
   _go(zookeeper.ZooKeeperException, 0)
   _go(ZooServerProblem, 0)
-elif sys.argv[1:] == ['functions']:
+elif args == ['functions']:
   things = [attr for attr in dir(zookeeper)
       if attr == attr.lower() and not attr.startswith('_')]
   for attr in things:
     print(attr)
 else:
   m=Mirror()
-  n=m.get('/')
-  n.addChildWatcher(uuid.uuid4(), print)
+  root=m.get('/')
+  root.addChildWatcher(uuid.uuid4(),
+      lambda ch: print("root children:", ch))
+  root.addValueWatcher(uuid.uuid4(),
+      lambda val: print("root value:", val))
+  other=m.get('/foo')
+  other.addChildWatcher(uuid.uuid4(),
+      lambda ch: print("other children:", ch))
+  other.addValueWatcher(uuid.uuid4(),
+      lambda val: print("other value:", val))
   while True:
-    print(n.value())
-    print(n.children())
     time.sleep(5)
 

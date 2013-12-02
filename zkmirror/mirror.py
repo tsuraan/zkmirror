@@ -1,6 +1,7 @@
 from threading import Lock
 import zookeeper
 import json
+import sys
 
 from .node import Node
 from .js import JsNode
@@ -19,6 +20,13 @@ from .zk import ALL_ACL
 from .zk import OK
 from .zk import silence
 
+DEBUG=False
+def debug(*args):
+  global DEBUG
+  if not DEBUG:
+    return
+  sys.stderr.write(' '.join(map(str, args)) + "\n")
+
 class Mirror(object):
   def __init__(self, *servers):
     silence()
@@ -33,8 +41,12 @@ class Mirror(object):
     self.__initstr = ','.join('%s:%d' % pair for pair in servers)
     self.__zk      = -1 
     self.__state   = 0
+
     self.__nodes   = {}
     self.__nodelck = Lock()
+
+    self.__missing = set()
+    self.__misslck = Lock()
 
     # List of actions that failed while we were not connected
     self.__pending = []
@@ -73,53 +85,27 @@ class Mirror(object):
   def create_json(self, path, value, flags=0):
     return JsNode(self.create(path, json.dumps(value), flags))
 
-  def _get_cb(self, path):
-    def cb(_zk, status, value, meta):
-      self._update_node(path, status, lambda node:
-          node._val(value, meta))
-    return cb
-
-  def _ls_cb(self, path):
-    def cb(_zk, status, children):
-      self._update_node(path, status, lambda node: node._children(children))
-    return cb
-
-  def _update_node(self, path, status, fn):
-    try:
-      node = self.__nodes[path]
-    except KeyError:
-      return
-    if status == OK:
-      # This is the result of zookeeper returning good data, so _events has a
-      # good watch established looking for changes to path
-      fn(node)
-    elif status == NONODE:
-      # Tried to do a get on the path, but it's gone, so _event's watch
-      # isn't any good. we need to set one for once it exists
-      node._delete()
-      self._try_zoo(lambda z: zookeeper.aexists(z, path, self._events))
-    else:
-      # Something (I assume connection-related) made the request fail. We'll
-      # try again once we reconnect
-      self.__pending.append(lambda z:
-          zookeeper.aget(z, path, self._events, self._get_cb(path)))
-
   def _events(self, zk, event, state, path):
     if zk != self.__zk:
       return
 
     if event == CHANGED_EVENT:
-      zookeeper.aget(self.__zk, path, self._events, self._get_cb(path))
+      debug('_events: adding CHANGE watcher for', path)
+      self._aget(path)
     elif event == CHILD_EVENT:
-      zookeeper.aget_children(self.__zk, path, self._events, self._ls_cb(path))
+      debug('_events: adding CHILDREN watcher for', path)
+      self._aget_children(path)
     elif event == CREATED_EVENT:
-      zookeeper.aget(self.__zk, path, self._events, self._get_cb(path))
-      zookeeper.aget_children(self.__zk, path, self._events, self._ls_cb(path))
+      debug('_events: adding CHANGE and CHILDREN watchers for', path)
+      del_missing(self.__misslck, self.__missing, path)
+      self._aget(path)
+      self._aget_children(path)
     elif event == DELETED_EVENT:
       try:
         node = self.__nodes[path]
         node._delete()
-        zookeeper.aexists(self.__zk, path, self._events)
+        debug('_events: adding EXISTS watcher for', path)
+        self._aexists(path)
       except KeyError:
         pass
     elif event == SESSION_EVENT:
@@ -134,18 +120,10 @@ class Mirror(object):
         else:
           # Happy reconnection; just do the pending stuff
           while self.__pending:
-            self.__pending.pop()(self.__zk)
+            self.__pending.pop()()
 
       self.__state = state
-      print 'My state is now', describe_state(self.__state)
-
-  def _try_zoo(self, action):
-    try:
-      action(self.__zk)
-    except (SystemError, ZooKeeperException):
-      # self.__zk must really suck; we'll throw this in pending until we get a
-      # new connection
-      self.__pending.append(action)
+      debug('_events: My state is now', describe_state(self.__state))
 
   def _reconnect(self):
     oldzk        = self.__zk
@@ -155,9 +133,109 @@ class Mirror(object):
 
   def _setup(self, node):
     path = node.path
-    print 'setting up node for', path
-    self._try_zoo(lambda z:
-        zookeeper.aget(z, path, self._events, self._get_cb(path)))
-    self._try_zoo(lambda z:
-        zookeeper.aget_children(z, path, self._events, self._ls_cb(path)))
+    debug('_setup: adding CHANGE and CHILDREN watchers for', path)
+    self._aget(path)
+    self._aget_children(path)
+
+  def _aget(self, path):
+    self._try_zoo(
+        lambda: zookeeper.aget(self.__zk, path, self._events,
+          self._get_cb(path)))
+
+  def _aget_children(self, path):
+    self._try_zoo(
+        lambda: zookeeper.aget_children(self.__zk, path, self._events,
+          self._ls_cb(path)))
+
+  def _aexists(self, path):
+    if add_missing(self.__misslck, self.__missing, path):
+      debug('_aexists is hooking in a callback on existence')
+      watcher = self._events
+    else:
+      debug('_aexists is NOT hooking in a callback on existence')
+      watcher = None
+
+    self._try_zoo(
+        lambda: zookeeper.aexists(self.__zk, path, watcher,
+          self._exist_cb(path)))
+
+  def _try_zoo(self, action):
+    try:
+      action()
+    except (SystemError, ZooKeeperException):
+      # self.__zk must be really broken; we'll throw this in pending until we
+      # get a new connection
+      self.__pending.append(action)
+
+  def _get_cb(self, path):
+    def cb(_zk, status, value, meta):
+      self._update_node(
+          path,
+          status,
+          lambda node: node._val(value, meta),
+          lambda: self._aget(path))
+    return cb
+
+  def _ls_cb(self, path):
+    def cb(_zk, status, children):
+      self._update_node(
+          path,
+          status,
+          lambda node: node._children(children),
+          lambda: self._aget_children(path))
+    return cb
+
+  def _exist_cb(self, path):
+    def cb(_zk, status, meta):
+      if status == OK:
+        # It started existing while our message was in transit; set up the
+        # node's data and allow watch callbacks to occur on future aexist
+        # calls
+        del_missing(self.__misslck, self.__missing, path)
+        self._aget(path)
+        self._aget_children(path)
+      elif status == NONODE:
+        # This is what we expect; our watcher is set up, so we're happy
+        pass
+      else:
+        # Something went wrong communication-wise (disconnect, timeout,
+        # whatever). try again once re-connected. We need to remove the path
+        # from __missing so that a future aexists call can put the watcher
+        # back on
+        del_missing(self.__misslck, self.__missing, path)
+        self.__pending.append(lambda: self._aexists(path))
+
+  def _update_node(self, path, status, node_action, on_servfail):
+    try:
+      node = self.__nodes[path]
+    except KeyError:
+      return
+    if status == OK:
+      # This is the result of zookeeper returning good data, so _events has a
+      # good watch established looking for changes to path
+      node_action(node)
+    elif status == NONODE:
+      # Tried to do a get on the path, but it's gone, so _event's watch
+      # isn't any good. we need to set one for once it exists
+      node._delete()
+      debug('_update_node: adding EXISTS watcher for', path)
+      self._aexists(path)
+    else:
+      # Something (I assume connection-related) made the request fail. We'll
+      # try again once we reconnect
+      self.__pending.append(on_servfail)
+
+def add_missing(lock, missing, path):
+  with lock:
+    if path in missing:
+      return False
+    missing.add(path)
+    return True
+
+def del_missing(lock, missing, path):
+  with lock:
+    try:
+      missing.remove(path)
+    except KeyError:
+      pass
 

@@ -124,7 +124,7 @@ class Node(object):
     """
     return list(self.__children.get())
 
-  def create(self, value=None):
+  def create(self, value=''):
     """Create a node at this path; this will fail if this node already has
     data, or in all sorts of connection failure events.
     """
@@ -145,24 +145,42 @@ class Node(object):
     """
     zookeeper.set(self.__zk.fileno(), self.path, value, version)
 
-  def addValueWatcher(self, key, fn):
+  def delete(self, version):
+    """Delete the node at this path. This can fail for all sorts of reasons:
+    not empty, bad version, doesn't exist, various server problems. If the
+    node should be deleted regardless of its current version, version can be
+    given as -1.
     """
+    zookeeper.delete(self.__zk.fileno(), self.path, version)
+
+  def addValueWatcher(self, key, fn):
+    """Add a function to be called when the value in this node changes. This
+    function will be called with (data, meta) when the node exists, and it
+    will be called with None if the node's been deleted. Exceptions thrown by
+    fn will be swallowed. The key parameter is used to remove the watcher.
+    Keys must be unique; adding different functions with the same key will
+    result in previous watchers being replaced.
     """
     self._add_cb("value", self.__val_cbs, key, fn)
 
   def addChildWatcher(self, key, fn):
-    """
+    """Add a function to be called when the children of this node changes.
+    This function will be called with [children] when the node exists, and it
+    will be called with None if the node's been deleted. Exceptions thrown by
+    fn will be swallowed. The key parameter is used to remove the watcher.
+    Keys must be unique; adding different functions with the same key will
+    result in previous watchers being replaced.
     """
     self._add_cb("child", self.__ch_cbs, key, fn)
 
   def delValueWatcher(self, key):
-    """
+    """Remove the watcher that was added with the given key.
     """
     try:             del self.__val_cbs[key]
     except KeyError: pass
 
   def delChildWatcher(self, key):
-    """
+    """Remove the watcher that was added with the given key.
     """
     try:             del self.__ch_cbs[key]
     except KeyError: pass
