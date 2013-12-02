@@ -97,7 +97,7 @@ class Mirror(object):
     return JsNode(self.get(path))
 
   @fix_path
-  def create(self, path, value=None, flags=0):
+  def create(self, path, value='', flags=0):
     if not flags:
       node = self.get(path)
       node.create(value)
