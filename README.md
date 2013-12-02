@@ -8,14 +8,16 @@ edge-cases.
 
 # Usage
 
-The connection to ZooKeeper is managed through the zkmirror.Mirror class. Its
-constructor takes a list of server addresses, or (address, port) pairs. If
-listed servers cannot be resolved to IP addresses, the constructor will raise;
-otherwise, it will always succeed:
+The connection to ZooKeeper is managed through the zkmirror.Mirror class.
+Initially, the Mirror has no awareness of any ZooKeeper servers, and it makes
+no attempt to connect to any. The actual ZooKeeper connections are initiated
+with the ```connect(...)``` method, which takes a list of server addresses, or
+(address, port) pairs. If listed servers cannot be resolved to IP addresses,
+```connect(...)``` will raise; otherwise, it will always succeed:
 
 ```python
 import zkmirror
-mirror = zkmirror.Mirror()
+mirror = zkmirror.Mirror().connect()
 ```
 
 Once a client is created, node instances can be created with the ```get```

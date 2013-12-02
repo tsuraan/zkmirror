@@ -1,6 +1,8 @@
 from threading import Lock
+import traceback
 import zookeeper
 import json
+import time
 import sys
 
 from .node import Node
@@ -28,17 +30,8 @@ def debug(*args):
   sys.stderr.write(' '.join(map(str, args)) + "\n")
 
 class Mirror(object):
-  def __init__(self, *servers):
+  def __init__(self):
     silence()
-    if not servers:
-      servers = ('localhost',)
-    servers = list(servers)
-
-    for idx, val in enumerate(servers):
-      if isinstance(val, basestring):
-        servers[idx] = (val, 2181)
-
-    self.__initstr = ','.join('%s:%d' % pair for pair in servers)
     self.__zk      = -1 
     self.__state   = 0
 
@@ -48,10 +41,39 @@ class Mirror(object):
     self.__missing = set()
     self.__misslck = Lock()
 
+    self.__disconnected = time.time()
+
+    self.__state_cbs = {}
     # List of actions that failed while we were not connected
     self.__pending = []
 
+  def connect(self, *servers):
+    if not servers:
+      servers = ('localhost',)
+    servers = list(servers)
+
+    for idx, val in enumerate(servers):
+      if isinstance(val, basestring):
+        servers[idx] = (val, 2181)
+
+    self.__initstr = ','.join('%s:%d' % pair for pair in servers)
     self._reconnect()
+    return self
+
+  def time_disconnected(self):
+    """Return how long we've been disconnected. Returns None if we are
+    currently connected.
+    """
+    try:
+      return time.time() - self.__disconnected
+    except TypeError:
+      # self.__disconnected is None
+      return None
+
+  def is_connected(self):
+    """Returns True if we are currently connected to ZooKeeper, False if not.
+    """
+    return not self.__disconnected
 
   def fileno(self):
     return self.__zk
@@ -85,6 +107,27 @@ class Mirror(object):
   def create_json(self, path, value, flags=0):
     return JsNode(self.create(path, json.dumps(value), flags))
 
+  def addStateWatcher(self, key, fn):
+    """Add a function that will be called when our connection state changes.
+    This function will be called with a zookeeper state variable (an int with
+    one of the values of
+    zookeeper.{AUTH_FAILED,EXPIRED_SESSION,CONNECTING,ASSOCIATING,CONNECTED}_STATE
+    of the value 0 (shouldn't happen, but it does)
+    """
+    def catcher(val):
+      try:
+        fn(val)
+      except:
+        print 'state watcher callback threw this:'
+        traceback.print_exc()
+    self.__state_cbs[key] = catcher
+
+  def delStateWatcher(self, key):
+    """Remove the state watcher that was assigned at the given key.
+    """
+    try:             del self.__state_cbs[key]
+    except KeyError: pass
+
   def _events(self, zk, event, state, path):
     if zk != self.__zk:
       return
@@ -109,6 +152,14 @@ class Mirror(object):
       except KeyError:
         pass
     elif event == SESSION_EVENT:
+      for fn in self.__state_cbs.values():
+        fn(state)
+
+      if state == CONNECTED_STATE:
+        self.__disconnected = None
+      elif self.__disconnected is None:
+        self.__disconnected = time.time()
+
       if state == EXPIRED_SESSION_STATE:
         self._reconnect()
       elif state == CONNECTED_STATE:

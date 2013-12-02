@@ -190,7 +190,7 @@ class Node(object):
       try:
         fn(val)
       except:
-        print desc, "watcher callbck threw this:"
+        print desc, "watcher callback threw this:"
         traceback.print_exc()
     dct[key]=catcher
 
