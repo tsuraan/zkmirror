@@ -69,7 +69,10 @@ class Value(object):
     """
     value = self._wait(timeout)
     if value is None:
-      raise zookeeper.NoNodeException
+      time.sleep(0.1)
+      value = self._wait(0)
+      if value is None:
+        raise zookeeper.NoNodeException
     return value
 
   def _wait(self, timeout=5):
@@ -97,6 +100,12 @@ class Value(object):
 
   def _set(self, value):
     self.__val = value
+
+  def _reset(self):
+    """Reset this Value to its original state, which means that it's blocks on
+    reading its value until something gives it one.
+    """
+    del self.__val
 
 class Node(object):
   @fix_path
@@ -132,6 +141,8 @@ class Node(object):
       self.value()
       raise NodeExistsException
     except NoNodeException:
+      self.__value._reset()
+      self.__children._reset()
       zookeeper.create(self.__zk.fileno(), self.path, value, ALL_ACL, 0)
 
   def set(self, value, version):
@@ -143,6 +154,7 @@ class Node(object):
     To stomp over the value, regardless of what is stored in zookeeper, set
     version to -1.
     """
+    self.__value._reset()
     zookeeper.set(self.__zk.fileno(), self.path, value, version)
 
   def delete(self, version):
@@ -151,6 +163,8 @@ class Node(object):
     node should be deleted regardless of its current version, version can be
     given as -1.
     """
+    self.__value._reset()
+    self.__children._reset()
     zookeeper.delete(self.__zk.fileno(), self.path, version)
 
   def addValueWatcher(self, key, fn):
@@ -200,13 +214,13 @@ class Node(object):
     stored = self._immed_raw_value()
     if stored is not None:
       for fn in self.__val_cbs.values():
-        fn(None)
+        self.__zk._run_async(lambda: fn(None))
     self.__value._set(None)
 
     children = self._immed_raw_children()
     if children is not None:
       for fn in self.__ch_cbs.values():
-        fn(None)
+        self.__zk._run_async(lambda: fn(None))
     self.__children._set(None)
 
   def _val(self, value, meta):
@@ -216,7 +230,7 @@ class Node(object):
     stored = self._immed_raw_value()
     if (stored is None) or (stored[1].version != meta.version):
       for fn in self.__val_cbs.values():
-        fn( (value, meta) )
+        self.__zk._run_async(lambda: fn( (value, meta) ))
     self.__value._set( (value, meta) )
 
   def _children(self, children):
@@ -225,7 +239,7 @@ class Node(object):
     existing = self._immed_raw_children()
     if (existing is None) or (existing != children):
       for fn in self.__ch_cbs.values():
-        fn( children )
+        self.__zk._run_async(lambda: fn( children ))
     self.__children._set(children)
 
   def _immed_raw_value(self):

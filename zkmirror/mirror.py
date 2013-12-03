@@ -1,4 +1,5 @@
-from threading import Lock
+from threading import Thread, Lock
+from Queue import Queue
 import traceback
 import zookeeper
 import json
@@ -35,6 +36,9 @@ def debug(*args):
 class Mirror(object):
   def __init__(self):
     silence()
+    self.__q       = Queue()
+    self.__async   = Thread(target=run_tasks, args=(self.__q,)).start()
+
     self.__zk      = -1 
     self.__state   = 0
 
@@ -159,6 +163,17 @@ class Mirror(object):
     """
     return ChrootMirror(path, self)
 
+  def _run_async(self, fn):
+    """Functions that wait on results from zookeeper cannot be usefully called
+    from within zookeeper callbacks, as the zookeeper receive socket is
+    blocked until the callback returns. Any callback that waits on zookeeper
+    data (calls to zookeeper.create, delete, exists, get, get_children wait,
+    but the equivalent zookeeper.acreate, etc calls do not wait) should
+    instead hand a thunk to this, so that the work can be done outside of the
+    zookeeper callback.
+    """
+    self.__q.put(fn)
+
   def _events(self, zk, event, state, path):
     if zk != self.__zk:
       return
@@ -184,7 +199,7 @@ class Mirror(object):
         pass
     elif event == SESSION_EVENT:
       for fn in self.__state_cbs.values():
-        fn(state)
+        self._run_async(lambda: fn(state))
 
       if state == CONNECTED_STATE:
         self.__disconnected = None
@@ -306,6 +321,24 @@ class Mirror(object):
       # Something (I assume connection-related) made the request fail. We'll
       # try again once we reconnect
       self.__pending.append(on_servfail)
+
+  def __del__(self):
+    def quit_async():
+      sys.exit(0)
+    self._run_async(quit_async)
+    zookeeper.close(self.__zk)
+
+def run_tasks(queue):
+  try:
+    while True:
+      function = queue.get()
+      try:
+        function()
+      except Exception:
+        print 'zkmirror asynchronous task failed like this:'
+        traceback.print_exc()
+  finally:
+    print 'run_tasks thread shutting down'
 
 def add_missing(lock, missing, path):
   with lock:
