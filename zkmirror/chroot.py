@@ -7,8 +7,10 @@ class ChrootMirror(object):
   """
   @fix_path
   def __init__(self, path, mirror):
-    self.__chroot = path
-    self.__mirror = mirror
+    self.__chroot          = path
+    self.__mirror          = mirror
+    self.time_disconnected = mirror.time_disconnected
+    self.is_connected      = mirror.is_connected
 
   @fix_path
   def get(self, path):
@@ -17,10 +19,22 @@ class ChrootMirror(object):
         self.__mirror.get(chrooted))
 
   @fix_path
-  def create(self, path, value=None, flags=0):
+  def get_json(self, path):
+    chrooted = self.__chroot + path
+    return ChrootNode(self.__chroot,
+        self.__mirror.get_json(chrooted))
+
+  @fix_path
+  def create(self, path, value='', flags=0):
     chrooted = self.__chroot + path
     return ChrootNode(self.__chroot,
         self.__mirror.create(chrooted, value, flags))
+
+  @fix_path
+  def create_r(self, path, value=''):
+    chrooted = self.__chroot + path
+    return ChrootNode(self.__chroot,
+        self.__mirror.create_r(chrooted, value))
 
   @fix_path
   def create_json(self, path, value, flags=0):
@@ -28,10 +42,18 @@ class ChrootMirror(object):
     return ChrootNode(self.__chroot,
         self.__mirror.create_json(chrooted, value, flags))
 
-  def __getattr__(self, attr):
-    """Pass everything else through to the mirror"""
-    return getattr(self.__mirror, attr)
-    
+  @fix_path
+  def create_r_json(self, path, value):
+    chrooted = self.__chroot + path
+    return ChrootNode(self.__chroot,
+        self.__mirror.create_r_json(chrooted, value))
+
+  @fix_path
+  def ensure_exists(self, path, value=''):
+    chrooted = self.__chroot + path
+    return ChrootNode(self.__chroot,
+        self.__mirror.ensure_exists(chrooted, value))
+
 class ChrootNode(object):
   """A Node-like class that wraps Nodes and fakes their "path" attribute to
   not include a path base.
