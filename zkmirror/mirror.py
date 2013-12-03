@@ -9,6 +9,8 @@ from .chroot import ChrootMirror
 from .node import Node
 from .js import JsNode
 from .zk import ZooKeeperException
+from .zk import NodeExistsException
+from .zk import NoNodeException
 from .zk import fix_path
 from .zk import describe_state
 from .zk import EXPIRED_SESSION_STATE
@@ -107,6 +109,25 @@ class Mirror(object):
 
   def create_json(self, path, value, flags=0):
     return JsNode(self.create(path, json.dumps(value), flags))
+
+  @fix_path
+  def ensure_exists(self, path, value=''):
+    """Make sure every node, up to the given path, exists in zookeeper.
+    """
+    node = self.get(path)
+    try:
+      node.value(timeout=0.1)
+    except NoNodeException:
+      try:
+        node.create(value)
+      except NodeExistsException:
+        # No problem; it exists
+        pass
+      except NoNodeException:
+        # the parent doesn't exist
+        self.ensure_exists(path.rsplit('/',1)[0])
+        self.ensure_exists(path)
+    return node
 
   def addStateWatcher(self, key, fn):
     """Add a function that will be called when our connection state changes.
