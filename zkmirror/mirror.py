@@ -111,8 +111,19 @@ class Mirror(object):
     path = zookeeper.create(self.__zk, path, value, ALL_ACL, flags)
     return self.get(path)
 
+  @fix_path
+  def create_r(self, path, value=''):
+    """Create the entire path up to this node, and then create this node"""
+    pre = path.rsplit('/',1)[0]
+    if pre:
+      self.ensure_exists(pre)
+    self.create(path, value)
+
   def create_json(self, path, value, flags=0):
     return JsNode(self.create(path, json.dumps(value), flags))
+
+  def create_r_json(self, path, value):
+    return JsNode(self.create_r(path, json.dumps(value)))
 
   @fix_path
   def ensure_exists(self, path, value=''):
