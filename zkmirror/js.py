@@ -7,11 +7,11 @@ class JsNode(object):
   def __init__(self, node):
     self.__node = node
 
-  def value(self):
+  def value(self, timeout=5):
     """Get the decode JSON value of whatever is stored at this node, and its
     metadata.
     """
-    val, meta = self.__node.value()
+    val, meta = self.__node.value(timeout)
     return json.loads(val), meta
 
   def create(self, value):
@@ -51,8 +51,10 @@ class JsNode(object):
           continue
 
   def addValueWatcher(self, key, fn):
-    def decoder(raw):
-      fn(json.loads(raw))
+    def decoder(value):
+      if value is not None:
+        value = (json.loads(value[0]), value[1])
+      fn(value)
     self.__node.addValueWatcher(key, decoder)
 
   def __getattr__(self, attr):

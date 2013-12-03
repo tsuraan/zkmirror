@@ -112,17 +112,17 @@ class Node(object):
   def path(self):
     return self.__path
 
-  def value(self):
+  def value(self, timeout=5):
     """Get the value and metadata for this node. This will raise
     NoNodeException if the node doesn't exist.
     """
-    return self.__value.get()
+    return self.__value.get(timeout)
 
-  def children(self):
+  def children(self, timeout=5):
     """Get the children of this node. This raises NoNodeException if the node
     doesn't exist.
     """
-    return list(self.__children.get())
+    return list(self.__children.get(timeout))
 
   def create(self, value=''):
     """Create a node at this path; this will fail if this node already has
