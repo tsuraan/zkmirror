@@ -6,6 +6,8 @@ import traceback
 import zookeeper
 import time
 
+TINY_SLEEP=0.01
+
 class Meta(object):
   def __init__(self, dct):
     self.__ctime       = dct['ctime']
@@ -88,7 +90,7 @@ class Value(object):
       try:
         return self.__val
       except AttributeError:
-        pass
+        time.sleep(TINY_SLEEP)
 
     while time.time() < end:
       try:
@@ -101,12 +103,6 @@ class Value(object):
   def _set(self, value):
     self.__val = value
 
-  def _reset(self):
-    """Reset this Value to its original state, which means that it's blocks on
-    reading its value until something gives it one.
-    """
-    del self.__val
-
 class Node(object):
   @fix_path
   def __init__(self, path, zk):
@@ -116,6 +112,7 @@ class Node(object):
     self.__children = Value()
     self.__val_cbs  = {}
     self.__ch_cbs   = {}
+    print path, "Node created"
 
   @property
   def path(self):
@@ -131,9 +128,9 @@ class Node(object):
     """Get the children of this node. This raises NoNodeException if the node
     doesn't exist.
     """
-    return list(self.__children.get(timeout))
+    return self.__children.get(timeout)
 
-  def create(self, value=''):
+  def create(self, value='', await_update=1):
     """Create a node at this path; this will fail if this node already has
     data, or in all sorts of connection failure events.
     """
@@ -141,11 +138,11 @@ class Node(object):
       self.value()
       raise NodeExistsException
     except NoNodeException:
-      self.__value._reset()
-      self.__children._reset()
-      zookeeper.create(self.__zk.fileno(), self.path, value, ALL_ACL, 0)
+      self.__zk._use_socket(lambda z:
+          zookeeper.create(z, self.path, value, ALL_ACL, 0))
+      self._wait_version(await_update, 0)
 
-  def set(self, value, version):
+  def set(self, value, version, await_update=1):
     """Set the value to store at this node. If this node doesn't exist, this
     will raise NoNodeException; if the given version isn't the most recently
     stored in zookeeper, this will raise BadVersionException. Other server
@@ -154,18 +151,18 @@ class Node(object):
     To stomp over the value, regardless of what is stored in zookeeper, set
     version to -1.
     """
-    self.__value._reset()
-    zookeeper.set(self.__zk.fileno(), self.path, value, version)
+    self.__zk._use_socket(lambda z:
+        zookeeper.set(z, self.path, value, version))
+    self._wait_version(await_update, version+1)
 
-  def delete(self, version):
+  def delete(self, version, await_update=1):
     """Delete the node at this path. This can fail for all sorts of reasons:
     not empty, bad version, doesn't exist, various server problems. If the
     node should be deleted regardless of its current version, version can be
     given as -1.
     """
-    self.__value._reset()
-    self.__children._reset()
-    zookeeper.delete(self.__zk.fileno(), self.path, version)
+    self.__zk._use_socket(lambda z: zookeeper.delete(z, self.path, version))
+    self._wait_version(await_update, -1)
 
   def addValueWatcher(self, key, fn):
     """Add a function to be called when the value in this node changes. This
@@ -222,6 +219,7 @@ class Node(object):
       for fn in self.__ch_cbs.values():
         self.__zk._run_async(lambda: fn(None))
     self.__children._set(None)
+    print self.path, "marked as deleted"
 
   def _val(self, value, meta):
     """Only to be called by zk, update this node's stored value.
@@ -232,6 +230,7 @@ class Node(object):
       for fn in self.__val_cbs.values():
         self.__zk._run_async(lambda: fn( (value, meta) ))
     self.__value._set( (value, meta) )
+    print self.path, "value set"
 
   def _children(self, children):
     """Only to be called by zk, update this node's children.
@@ -241,6 +240,7 @@ class Node(object):
       for fn in self.__ch_cbs.values():
         self.__zk._run_async(lambda: fn( children ))
     self.__children._set(children)
+    print self.path, "children set"
 
   def _immed_raw_value(self):
     try:
@@ -254,3 +254,19 @@ class Node(object):
     except zookeeper.OperationTimeoutException:
       return None
 
+  def _wait_version(self, timeout, version):
+    """Wait for this node's version to be at least the given version. If the
+    version is -1, this waits for the node to be deleted.
+    """
+    giveup = time.time() + timeout
+    while time.time() < giveup:
+      try:
+        cur_version = self.value(0)[1].version
+      except NoNodeException:
+        cur_version = -1
+
+      if version == cur_version:
+        return
+      if 0 <= version <= cur_version:
+        return
+      time.sleep(TINY_SLEEP)

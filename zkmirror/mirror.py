@@ -44,6 +44,7 @@ class Mirror(object):
 
     self.__nodes   = {}
     self.__nodelck = Lock()
+    self.__socklck = Lock()
 
     self.__missing = set()
     self.__misslck = Lock()
@@ -53,6 +54,12 @@ class Mirror(object):
     self.__state_cbs = {}
     # List of actions that failed while we were not connected
     self.__pending = []
+
+  def connstr(self):
+    try:
+      return self.__initstr
+    except AttributeError:
+      return None
 
   def connect(self, *servers):
     if not servers:
@@ -82,9 +89,6 @@ class Mirror(object):
     """
     return not self.__disconnected
 
-  def fileno(self):
-    return self.__zk
-
   @fix_path
   def get(self, path):
     try:
@@ -108,7 +112,8 @@ class Mirror(object):
       node = self.get(path)
       node.create(value)
       return node
-    path = zookeeper.create(self.__zk, path, value, ALL_ACL, flags)
+    path = self._use_socket(lambda z:
+        zookeeper.create(z, path, value, ALL_ACL, flags))
     return self.get(path)
 
   @fix_path
@@ -247,13 +252,14 @@ class Mirror(object):
 
   def _aget(self, path):
     self._try_zoo(
-        lambda: zookeeper.aget(self.__zk, path, self._events,
-          self._get_cb(path)))
+        lambda: self._use_socket(
+          lambda z: zookeeper.aget(z, path, self._events, self._get_cb(path))))
 
   def _aget_children(self, path):
     self._try_zoo(
-        lambda: zookeeper.aget_children(self.__zk, path, self._events,
-          self._ls_cb(path)))
+        lambda: self._use_socket(
+          lambda z: zookeeper.aget_children(z, path, self._events,
+            self._ls_cb(path))))
 
   def _aexists(self, path):
     if add_missing(self.__misslck, self.__missing, path):
@@ -264,8 +270,8 @@ class Mirror(object):
       watcher = None
 
     self._try_zoo(
-        lambda: zookeeper.aexists(self.__zk, path, watcher,
-          self._exist_cb(path)))
+        lambda: self._use_socket(
+          lambda z: zookeeper.aexists(z, path, watcher, self._exist_cb(path))))
 
   def _try_zoo(self, action):
     try:
@@ -332,6 +338,10 @@ class Mirror(object):
       # Something (I assume connection-related) made the request fail. We'll
       # try again once we reconnect
       self.__pending.append(on_servfail)
+
+  def _use_socket(self, action):
+    with self.__socklck:
+      return action(self.__zk)
 
   def __del__(self):
     def quit_async():
