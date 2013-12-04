@@ -37,7 +37,9 @@ class Mirror(object):
   def __init__(self):
     silence()
     self.__q       = Queue()
-    self.__async   = Thread(target=run_tasks, args=(self.__q,)).start()
+    self.__async   = Thread(target=run_tasks, args=(self.__q,))
+    self.__async.daemon = True
+    self.__async.start()
 
     self.__zk      = -1 
     self.__state   = 0
@@ -343,11 +345,24 @@ class Mirror(object):
     with self.__socklck:
       return action(self.__zk)
 
-  def __del__(self):
+  def close(self):
     def quit_async():
       sys.exit(0)
     self._run_async(quit_async)
-    zookeeper.close(self.__zk)
+    print 'killed async thread'
+    self.__async.join()
+    print 'async thread done'
+    if self.__zk >= 0:
+      zookeeper.close(self.__zk)
+      self.__zk = -1
+      try:
+        del self.__initstr
+      except AttributeError:
+        pass
+    print 'zookeeper closed'
+
+  def __del__(self):
+    self.close()
 
 def run_tasks(queue):
   try:

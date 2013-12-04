@@ -40,7 +40,7 @@ elif args == ['functions']:
   for attr in things:
     print(attr)
 else:
-  m=Mirror()
+  m=Mirror().connect()
   root=m.get('/')
   root.addChildWatcher(uuid.uuid4(),
       lambda ch: print("root children:", ch))
@@ -51,6 +51,16 @@ else:
       lambda ch: print("other children:", ch))
   other.addValueWatcher(uuid.uuid4(),
       lambda val: print("other value:", val))
+
+  missing=m.get("/missing")
+  missing.create("value")
+  (value, meta) = missing.value()
+  print(value, meta)
+  missing.set("new value", meta.version)
+  (new_value, new_meta) = missing.value()
+  print(new_value, new_meta)
+  missing.delete(new_meta.version)
+
   while True:
     time.sleep(5)
 
