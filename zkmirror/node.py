@@ -208,16 +208,20 @@ class Node(object):
   def _delete(self):
     """Only to be called by zk, update that this node is deleted.
     """
-    stored = self._immed_raw_value()
-    if stored is not None:
+    try:
+      already_deleted = (self.__value._wait(0) is None)
+    except zookeeper.OperationTimeoutException:
+      already_deleted = False
+
+    if not already_deleted:
+      # Only call the callbacks if we didn't already know that we were
+      # deleted.
       for fn in self.__val_cbs.values():
         self.__zk._run_async(lambda: fn(None))
-    self.__value._set(None)
-
-    children = self._immed_raw_children()
-    if children is not None:
       for fn in self.__ch_cbs.values():
         self.__zk._run_async(lambda: fn(None))
+
+    self.__value._set(None)
     self.__children._set(None)
     print self.path, "marked as deleted"
 
