@@ -193,9 +193,6 @@ class Mirror(object):
     self.__q.put(fn)
 
   def _events(self, zk, event, state, path):
-    if zk != self.__zk:
-      return
-
     if event == CHANGED_EVENT:
       debug('_events: adding CHANGE watcher for', path)
       self._aget(path)
@@ -216,6 +213,8 @@ class Mirror(object):
       except KeyError:
         pass
     elif event == SESSION_EVENT:
+      if zk != self.__zk:
+        return
       for fn in self.__state_cbs.values():
         self._run_async(lambda: fn(state))
 

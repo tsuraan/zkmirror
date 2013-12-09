@@ -122,13 +122,29 @@ class Node(object):
     """Get the value and metadata for this node. This will raise
     NoNodeException if the node doesn't exist.
     """
-    return self.__value.get(timeout)
+    timeout /= 2.0
+    try:
+      return self.__value.get(timeout)
+    except zookeeper.OperationTimeoutException:
+      if self.__zk.is_connected():
+        # We are connected to zookeeper, and we have no value at all. Let's
+        # try getting it again...
+        self.__zk._aget(self.path)
+      return self.__value.get(timeout)
 
   def children(self, timeout=5):
     """Get the children of this node. This raises NoNodeException if the node
     doesn't exist.
     """
-    return self.__children.get(timeout)
+    timeout /= 2.0
+    try:
+      return self.__children.get(timeout)
+    except zookeeper.OperationTimeoutException:
+      if self.__zk.is_connected():
+        # We are connected to zookeeper, and we have no children at all. Let's
+        # try getting them again...
+        self.__zk._aget_children(self.path)
+      return self.__children.get(timeout)
 
   def create(self, value='', await_update=1):
     """Create a node at this path; this will fail if this node already has
