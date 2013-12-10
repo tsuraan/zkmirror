@@ -101,8 +101,8 @@ class Mirror(object):
           node = self.__nodes[path]
         except KeyError:
           node = Node(path, self)
-          self._setup(node)
           self.__nodes[path] = node
+          self._setup(node)
         return node
 
   def get_json(self, path):
@@ -215,6 +215,7 @@ class Mirror(object):
     elif event == SESSION_EVENT:
       if zk != self.__zk:
         return
+
       for fn in self.__state_cbs.values():
         self._run_async(lambda: fn(state))
 
