@@ -73,7 +73,14 @@ class Mirror(object):
         servers[idx] = (val, 2181)
 
     self.__initstr = ','.join('%s:%d' % pair for pair in servers)
-    self._reconnect()
+    try:
+      self._reconnect()
+    except ZooKeeperException:
+      # This can happen if a server doesn't have a DNS entry, or it seems that
+      # it can happen for other reasons, but either way we want to act as
+      # though we aren't configured at all in this case
+      del self.__initstr
+      raise
     return self
 
   def time_disconnected(self):
